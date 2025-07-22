@@ -215,13 +215,47 @@ sample_data = {
     '총비용': [500000, 350000, 700000, 420000, 150000],
     '클릭수': [1000, 800, 1200, 950, 300],
     '전환수': [20, 10, 30, 25, 5],
-    '전환당매출액': [100000, 150000, 80000, '', 120000]
+    '전환당매출액': [100000.0, 150000.0, 80000.0, None, 120000.0]  # None으로 변경하고 float 타입으로 통일
 }
 input_df = pd.DataFrame(sample_data)
+
+# 컬럼 설정으로 편집 가능하도록 명시적 지정
+column_config = {
+    "키워드": st.column_config.TextColumn(
+        "키워드",
+        help="분석할 키워드를 입력하세요",
+        max_chars=50,
+    ),
+    "총비용": st.column_config.NumberColumn(
+        "총비용",
+        help="해당 키워드에 소요된 총 광고비",
+        min_value=0,
+        format="%d",
+    ),
+    "클릭수": st.column_config.NumberColumn(
+        "클릭수",
+        help="해당 키워드의 총 클릭 수",
+        min_value=0,
+        format="%d",
+    ),
+    "전환수": st.column_config.NumberColumn(
+        "전환수",
+        help="해당 키워드를 통한 총 전환 수",
+        min_value=0,
+        format="%d",
+    ),
+    "전환당매출액": st.column_config.NumberColumn(
+        "전환당매출액",
+        help="전환 1건당 평균 매출액 (ROAS 계산용, 없으면 빈칸)",
+        min_value=0,
+        format="%.0f",
+    ),
+}
 
 # 사용자가 데이터를 편집할 수 있는 인터랙티브 표 (데이터 에디터)
 edited_df = st.data_editor(
     input_df,
+    column_config=column_config,
     num_rows="dynamic", # 사용자가 행을 동적으로 추가/삭제 가능
     height=300, # 표의 높이 지정
     use_container_width=True
