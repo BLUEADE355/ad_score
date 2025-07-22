@@ -7,18 +7,20 @@ import numpy as np
 # --------------------------------------------------------------------------
 # 개선된 키워드 분석 로직 (성과 점수 가중치 조절 & ROAS 추가)
 # --------------------------------------------------------------------------
-def run_keyword_analysis(df: pd.DataFrame, contrib_weight: float, rate_weight: float, cpa_weight: float, revenue_per_conversion: float):
+def run_keyword_analysis(df: pd.DataFrame, contrib_weight: float, rate_weight: float, cpa_weight: float):
     try:
         # --- 데이터 컬럼 이름 정의 ---
         col_keyword = '키워드'
         col_cost = '총비용'
         col_clicks = '클릭수'
         col_conversions = '전환수'
+        col_revenue_per_conv = '전환당매출액'
         
         # 데이터 타입 변환 (오류 방지)
         df[col_cost] = pd.to_numeric(df[col_cost], errors='coerce').fillna(0)
         df[col_clicks] = pd.to_numeric(df[col_clicks], errors='coerce').fillna(0)
         df[col_conversions] = pd.to_numeric(df[col_conversions], errors='coerce').fillna(0)
+        df[col_revenue_per_conv] = pd.to_numeric(df[col_revenue_per_conv], errors='coerce')  # NaN은 유지
         df = df.dropna(subset=[col_keyword]) # 키워드 없는 행 제거
         df = df[df[col_keyword].astype(str).str.strip() != ''] # 빈 키워드 제거
 
@@ -35,6 +37,7 @@ def run_keyword_analysis(df: pd.DataFrame, contrib_weight: float, rate_weight: f
             cost = df.loc[i, col_cost]
             clicks = df.loc[i, col_clicks]
             conversions = df.loc[i, col_conversions]
+            revenue_per_conv = df.loc[i, col_revenue_per_conv]
 
             # 기존 지표들
             conv_eff = conversions / cost if cost != 0 else 0
@@ -42,9 +45,12 @@ def run_keyword_analysis(df: pd.DataFrame, contrib_weight: float, rate_weight: f
             conv_contrib = (conversions / total_conversions) * 100 if total_conversions != 0 else 0
             cpa = cost / conversions if conversions != 0 else 0
             
-            # ROAS 계산 (매출 / 광고비)
-            revenue = conversions * revenue_per_conversion
-            roas = revenue / cost if cost != 0 else 0
+            # ROAS 계산 (전환당매출액이 있는 경우만)
+            if pd.isna(revenue_per_conv) or revenue_per_conv == 0:
+                roas = None  # 전환당매출액이 없으면 None
+            else:
+                revenue = conversions * revenue_per_conv
+                roas = revenue / cost if cost != 0 else 0
             
             conv_eff_list.append(conv_eff)
             conv_rate_list.append(conv_rate)
@@ -122,7 +128,7 @@ def run_keyword_analysis(df: pd.DataFrame, contrib_weight: float, rate_weight: f
                 round(contrib, 2),
                 round(conv_rate_val, 2),
                 round(cpa, 2) if cpa else 0,
-                round(roas, 2),
+                round(roas, 2) if roas is not None else "NONE",
                 total_score,
                 strategy
             ])
@@ -156,7 +162,7 @@ st.write("---")
 st.subheader("⚖️ 성과 점수 기준 설정")
 st.write("각 지표의 중요도를 설정하세요. 비율은 자동으로 계산됩니다.")
 
-col1, col2, col3, col4 = st.columns(4)
+col1, col2, col3 = st.columns(3)
 
 with col1:
     contrib_weight = st.slider(
@@ -188,15 +194,6 @@ with col3:
         help="전환당 광고비 (낮을수록 좋음)"
     )
 
-with col4:
-    revenue_per_conversion = st.number_input(
-        "전환당 매출액 (원)", 
-        min_value=0, 
-        value=100000, 
-        step=10000,
-        help="ROAS 계산을 위한 전환당 평균 매출"
-    )
-
 # 가중치 비율 표시
 total_weight = contrib_weight + rate_weight + cpa_weight
 if total_weight > 0:
@@ -210,14 +207,15 @@ st.write("---")
 
 # --- 데이터 입력 UI ---
 st.subheader("📋 데이터 입력")
-st.info("엑셀이나 구글 시트에서 [키워드, 총비용, 클릭수, 전환수] 데이터를 복사한 후, 아래 표의 첫 번째 칸을 클릭하고 붙여넣기(Ctrl+V) 하세요.")
+st.info("엑셀이나 구글 시트에서 [키워드, 총비용, 클릭수, 전환수, 전환당매출액] 데이터를 복사한 후, 아래 표의 첫 번째 칸을 클릭하고 붙여넣기(Ctrl+V) 하세요. 전환당매출액이 없는 경우 빈칸으로 두면 ROAS는 계산되지 않습니다.")
 
 # 사용자가 데이터를 붙여넣기 쉽도록 예시 데이터가 포함된 빈 데이터프레임 생성
 sample_data = {
     '키워드': ['볼보 XC60', '볼보 S90 가격', '전기차 보조금', '수입 SUV 추천', '안전한 차'],
     '총비용': [500000, 350000, 700000, 420000, 150000],
     '클릭수': [1000, 800, 1200, 950, 300],
-    '전환수': [20, 10, 30, 25, 5]
+    '전환수': [20, 10, 30, 25, 5],
+    '전환당매출액': [100000, 150000, 80000, '', 120000]
 }
 input_df = pd.DataFrame(sample_data)
 
@@ -245,8 +243,7 @@ if st.button('🚀 분석 시작하기'):
                 valid_df, 
                 contrib_weight, 
                 rate_weight, 
-                cpa_weight, 
-                revenue_per_conversion
+                cpa_weight
             )
             
             if result_data is not None and not result_data.empty:
@@ -261,8 +258,9 @@ if st.button('🚀 분석 시작하기'):
                     st.write(f"**전환율 가중치**: {rate_ratio:.1f}%")
                     st.write(f"**CPA 가중치**: {cpa_ratio:.1f}%")
                 with col2:
-                    st.write(f"**전환당 매출액**: {revenue_per_conversion:,}원")
                     st.write(f"**분석 키워드 수**: {len(result_data)}개")
+                    roas_available = len([x for x in result_data['ROAS'] if x != "NONE"])
+                    st.write(f"**ROAS 계산 가능**: {roas_available}개 키워드")
                 
                 st.write("---")
                 
@@ -284,7 +282,10 @@ if st.button('🚀 분석 시작하기'):
                 
                 top_keyword = result_data.iloc[0]
                 worst_keyword = result_data.iloc[-1]
-                avg_roas = result_data['ROAS'].mean()
+                
+                # ROAS 평균 계산 (NONE이 아닌 값들만)
+                roas_values = [x for x in result_data['ROAS'] if x != "NONE"]
+                avg_roas = sum(roas_values) / len(roas_values) if roas_values else 0
                 
                 insight_col1, insight_col2, insight_col3 = st.columns(3)
                 
@@ -296,11 +297,18 @@ if st.button('🚀 분석 시작하기'):
                     )
                 
                 with insight_col2:
-                    st.metric(
-                        label="평균 ROAS", 
-                        value=f"{avg_roas:.2f}", 
-                        delta="매출 대비 광고비 효율"
-                    )
+                    if avg_roas > 0:
+                        st.metric(
+                            label="평균 ROAS", 
+                            value=f"{avg_roas:.2f}", 
+                            delta=f"{len(roas_values)}개 키워드 기준"
+                        )
+                    else:
+                        st.metric(
+                            label="평균 ROAS", 
+                            value="계산 불가", 
+                            delta="전환당매출액 데이터 없음"
+                        )
                 
                 with insight_col3:
                     strong_keywords = len(result_data[result_data['종합 점수'] >= 80])
