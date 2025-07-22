@@ -135,7 +135,7 @@ def run_keyword_analysis(df: pd.DataFrame, contrib_weight: float, rate_weight: f
         
         result_df = pd.DataFrame(
             result_list,
-            columns=["키워드", "전환 기여도 (%)", "전환율 (%)", "CPA (원)", "ROAS", "종합 점수", "전략 추천"]
+            columns=["키워드", "전환 기여도 (%)", "전환율 (%)", "CPA (원)", "ROAS (%)", "종합 점수", "전략 추천"]
         )
         result_df = result_df.sort_values(by="종합 점수", ascending=False).reset_index(drop=True)
         
