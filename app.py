@@ -50,7 +50,7 @@ def run_keyword_analysis(df: pd.DataFrame, contrib_weight: float, rate_weight: f
                 roas = None  # 전환당매출액이 없으면 None
             else:
                 revenue = conversions * revenue_per_conv
-                roas = revenue / cost if cost != 0 else 0
+                roas = (revenue / cost)*100 if cost != 0 else 0
             
             conv_eff_list.append(conv_eff)
             conv_rate_list.append(conv_rate)
