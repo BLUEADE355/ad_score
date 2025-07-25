@@ -1,67 +1,117 @@
-# app.py (성과 점수 기준 조절 & ROAS 추가 & 키워드 집계 기능 추가)
+# app.py (성과 점수 기준 조절 & ROAS 추가 & 키워드 집계 & 오류 처리 강화)
 
 import streamlit as st
 import pandas as pd
 import numpy as np
 
 # --------------------------------------------------------------------------
-# 개선된 키워드 분석 로직 (성과 점수 가중치 조절 & ROAS 추가 & 키워드 집계)
+# 개선된 키워드 분석 로직 (오류 처리 강화 버전)
 # --------------------------------------------------------------------------
 def run_keyword_analysis(df: pd.DataFrame, contrib_weight: float, rate_weight: float, cpa_weight: float):
     try:
-        # --- 데이터 컬럼 이름 정의 ---
-        col_keyword = '키워드'
-        col_cost = '총비용'
-        col_clicks = '클릭수'
-        col_conversions = '전환수'
-        col_revenue_per_conv = '전환당매출액'
+        # --- 컬럼명 유연하게 매핑 ---
+        # 가능한 컬럼명 변형들
+        keyword_variants = ['키워드', 'keyword', 'Keyword']
+        cost_variants = ['총비용', '비용', 'cost', 'Cost', '총 비용']
+        clicks_variants = ['클릭수', '클릭', 'clicks', 'Clicks', '클릭 수']
+        conversions_variants = ['전환수', '전환', 'conversions', 'Conversions', '전환 수']
+        revenue_variants = ['전환당매출액', '전환당 매출액', '매출액', 'revenue', 'Revenue']
         
-        # 데이터 타입 변환 (오류 방지)
-        df[col_cost] = pd.to_numeric(df[col_cost], errors='coerce').fillna(0)
-        df[col_clicks] = pd.to_numeric(df[col_clicks], errors='coerce').fillna(0)
-        df[col_conversions] = pd.to_numeric(df[col_conversions], errors='coerce').fillna(0)
-        df[col_revenue_per_conv] = pd.to_numeric(df[col_revenue_per_conv], errors='coerce')
-        df = df.dropna(subset=[col_keyword])
-        df = df[df[col_keyword].astype(str).str.strip() != '']
-
-        # --- 키워드별로 데이터 집계 (추가된 부분) ---
-        # 전환당매출액은 가중평균으로 계산
-        def weighted_avg_revenue(group):
-            conversions = group[col_conversions]
-            revenues = group[col_revenue_per_conv]
-            # 전환수가 있고 매출액이 있는 경우만 계산
-            valid_mask = (conversions > 0) & (~revenues.isna())
-            if valid_mask.any():
-                total_conversions = conversions[valid_mask].sum()
-                weighted_sum = (conversions[valid_mask] * revenues[valid_mask]).sum()
-                return weighted_sum / total_conversions if total_conversions > 0 else None
+        # 실제 컬럼명 찾기
+        def find_column(df, variants):
+            for col in df.columns:
+                if col.strip() in variants:
+                    return col
             return None
         
-        # 키워드별로 집계
-        df_grouped = df.groupby(col_keyword).agg({
+        col_keyword = find_column(df, keyword_variants)
+        col_cost = find_column(df, cost_variants)
+        col_clicks = find_column(df, clicks_variants)
+        col_conversions = find_column(df, conversions_variants)
+        col_revenue_per_conv = find_column(df, revenue_variants)
+        
+        # 필수 컬럼 확인
+        missing_cols = []
+        if not col_keyword: missing_cols.append("키워드")
+        if not col_cost: missing_cols.append("총비용")
+        if not col_clicks: missing_cols.append("클릭수")
+        if not col_conversions: missing_cols.append("전환수")
+        
+        if missing_cols:
+            st.error(f"필수 컬럼을 찾을 수 없습니다: {', '.join(missing_cols)}")
+            st.error("컬럼명이 [키워드, 총비용, 클릭수, 전환수, 전환당매출액] 형식인지 확인해주세요.")
+            return None
+        
+        # 데이터 타입 변환 (더 안전하게)
+        df[col_cost] = pd.to_numeric(df[col_cost].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+        df[col_clicks] = pd.to_numeric(df[col_clicks].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+        df[col_conversions] = pd.to_numeric(df[col_conversions].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+        
+        if col_revenue_per_conv:
+            df[col_revenue_per_conv] = pd.to_numeric(df[col_revenue_per_conv].astype(str).str.replace(',', ''), errors='coerce')
+        else:
+            df[col_revenue_per_conv] = None
+        
+        # 키워드 정리
+        df = df.dropna(subset=[col_keyword])
+        df[col_keyword] = df[col_keyword].astype(str).str.strip()
+        df = df[df[col_keyword] != '']
+
+        # --- 키워드별로 데이터 집계 ---
+        # 먼저 간단한 집계
+        agg_dict = {
             col_cost: 'sum',
             col_clicks: 'sum',
-            col_conversions: 'sum',
-            col_revenue_per_conv: weighted_avg_revenue
-        }).reset_index()
+            col_conversions: 'sum'
+        }
+        
+        df_grouped = df.groupby(col_keyword).agg(agg_dict).reset_index()
+        
+        # 전환당매출액 가중평균 별도 계산
+        if col_revenue_per_conv:
+            revenue_dict = {}
+            for keyword in df_grouped[col_keyword]:
+                keyword_data = df[df[col_keyword] == keyword]
+                conversions = keyword_data[col_conversions]
+                revenues = keyword_data[col_revenue_per_conv]
+                
+                # 전환수가 있고 매출액이 있는 경우만 계산
+                valid_mask = (conversions > 0) & (~revenues.isna())
+                if valid_mask.any():
+                    total_conversions = conversions[valid_mask].sum()
+                    if total_conversions > 0:
+                        weighted_sum = (conversions[valid_mask] * revenues[valid_mask]).sum()
+                        revenue_dict[keyword] = weighted_sum / total_conversions
+                    else:
+                        revenue_dict[keyword] = None
+                else:
+                    revenue_dict[keyword] = None
+            
+            # 전환당매출액 추가
+            df_grouped[col_revenue_per_conv] = df_grouped[col_keyword].map(revenue_dict)
+        else:
+            df_grouped[col_revenue_per_conv] = None
         
         # 집계된 데이터로 df 교체
-        df = df_grouped
+        df = df_grouped.copy()
+        
+        # 인덱스 리셋
+        df = df.reset_index(drop=True)
 
         # --- 1. 지표 계산 ---
-        conv_eff_list = []      # 전환 효율 (전환수/비용)
-        conv_rate_list = []     # 전환율
-        conv_contrib_list = []  # 전환 기여도
-        cpa_list = []           # CPA
-        roas_list = []          # ROAS
+        conv_eff_list = []
+        conv_rate_list = []
+        conv_contrib_list = []
+        cpa_list = []
+        roas_list = []
         
         total_conversions = df[col_conversions].sum()
 
-        for i in range(len(df)):
-            cost = df.loc[i, col_cost]
-            clicks = df.loc[i, col_clicks]
-            conversions = df.loc[i, col_conversions]
-            revenue_per_conv = df.loc[i, col_revenue_per_conv]
+        for idx in df.index:
+            cost = df.loc[idx, col_cost]
+            clicks = df.loc[idx, col_clicks]
+            conversions = df.loc[idx, col_conversions]
+            revenue_per_conv = df.loc[idx, col_revenue_per_conv] if col_revenue_per_conv else None
 
             # 기존 지표들
             conv_eff = conversions / cost if cost != 0 else 0
@@ -69,12 +119,12 @@ def run_keyword_analysis(df: pd.DataFrame, contrib_weight: float, rate_weight: f
             conv_contrib = (conversions / total_conversions) * 100 if total_conversions != 0 else 0
             cpa = cost / conversions if conversions != 0 else 0
             
-            # ROAS 계산 (전환당매출액이 있는 경우만)
-            if pd.isna(revenue_per_conv) or revenue_per_conv == 0:
-                roas = None  # 전환당매출액이 없으면 None
+            # ROAS 계산
+            if revenue_per_conv is None or pd.isna(revenue_per_conv) or revenue_per_conv == 0:
+                roas = None
             else:
                 revenue = conversions * revenue_per_conv
-                roas = (revenue / cost)*100 if cost != 0 else 0
+                roas = (revenue / cost) * 100 if cost != 0 else 0
             
             conv_eff_list.append(conv_eff)
             conv_rate_list.append(conv_rate)
@@ -100,7 +150,7 @@ def run_keyword_analysis(df: pd.DataFrame, contrib_weight: float, rate_weight: f
 
         norm_contrib_list = normalize(conv_contrib_list)
         norm_rate_list = normalize(conv_rate_list)
-        norm_cpa_list = reverse_normalize(cpa_list)  # CPA는 낮을수록 좋음
+        norm_cpa_list = reverse_normalize(cpa_list)
 
         # 가중치 정규화 (합계가 1이 되도록)
         total_weight = contrib_weight + rate_weight + cpa_weight
@@ -123,18 +173,19 @@ def run_keyword_analysis(df: pd.DataFrame, contrib_weight: float, rate_weight: f
         total = len(score_series)
         result_list = []
 
-        for i in range(len(df)):
-            keyword = df.loc[i, col_keyword]
-            cost = df.loc[i, col_cost]
-            clicks = df.loc[i, col_clicks]
-            conversions = df.loc[i, col_conversions]
+        for idx in df.index:
+            keyword = df.loc[idx, col_keyword]
+            cost = df.loc[idx, col_cost]
+            clicks = df.loc[idx, col_clicks]
+            conversions = df.loc[idx, col_conversions]
             
-            cpa = cpa_list[i]
-            roas = roas_list[i]
-            conv_rate_val = conv_rate_list[i]
-            contrib = conv_contrib_list[i]
-            total_score = total_scores[i]
-            rank_percentile = score_rank[i] / total
+            list_idx = df.index.get_loc(idx)
+            cpa = cpa_list[list_idx]
+            roas = roas_list[list_idx]
+            conv_rate_val = conv_rate_list[list_idx]
+            contrib = conv_contrib_list[list_idx]
+            total_score = total_scores[list_idx]
+            rank_percentile = score_rank[list_idx] / total
 
             if total_score == 0 or pd.isna(total_score):
                 strategy = "🔴 중단 전략: 광고 제거, 타겟·콘텐츠 리설정"
@@ -166,8 +217,9 @@ def run_keyword_analysis(df: pd.DataFrame, contrib_weight: float, rate_weight: f
         return result_df
 
     except Exception as e:
-        st.error(f"분석 중 오류가 발생했습니다: {e}")
-        st.error("입력 데이터의 형식을 확인해주세요. 모든 칸이 올바르게 채워져야 합니다.")
+        st.error(f"분석 중 오류가 발생했습니다: {str(e)}")
+        st.error("입력 데이터의 형식을 확인해주세요.")
+        st.info("필수 컬럼: 키워드, 총비용, 클릭수, 전환수 (선택: 전환당매출액)")
         return None
 
 # --------------------------------------------------------------------------
@@ -175,7 +227,7 @@ def run_keyword_analysis(df: pd.DataFrame, contrib_weight: float, rate_weight: f
 # --------------------------------------------------------------------------
 
 # 페이지 레이아웃 넓게 설정
-st.set_page_config(layout="wide")
+st.set_page_config(layout="wide", page_title="키워드 성과 분석 도구")
 
 # 제목
 st.title('🔑 소재/키워드 성과 분석')
@@ -231,71 +283,99 @@ st.write("---")
 
 # --- 데이터 입력 UI ---
 st.subheader("📋 데이터 입력")
-st.info("엑셀이나 구글 시트에서 [키워드, 총비용, 클릭수, 전환수, 전환당매출액] 데이터를 복사한 후, 아래 표의 첫 번째 칸을 클릭하고 붙여넣기(Ctrl+V) 하세요. 전환당매출액이 없는 경우 빈칸으로 두면 ROAS는 계산되지 않습니다.")
-st.warning("💡 **참고**: 동일한 키워드가 여러 행에 있는 경우, 자동으로 합산되어 하나의 키워드로 분석됩니다.")
 
-# 사용자가 데이터를 붙여넣기 쉽도록 예시 데이터가 포함된 빈 데이터프레임 생성
-sample_data = {
-    '키워드': ['볼보 XC60', '볼보 S90 가격', '전기차 보조금', '수입 SUV 추천', '안전한 차'],
-    '총비용': [500000, 350000, 700000, 420000, 150000],
-    '클릭수': [1000, 800, 1200, 950, 300],
-    '전환수': [20, 10, 30, 25, 5],
-    '전환당매출액': [100000.0, 150000.0, 80000.0, None, 120000.0]  # None으로 변경하고 float 타입으로 통일
-}
-input_df = pd.DataFrame(sample_data)
-
-# 컬럼 설정으로 편집 가능하도록 명시적 지정
-column_config = {
-    "키워드": st.column_config.TextColumn(
-        "키워드",
-        help="분석할 키워드를 입력하세요",
-        max_chars=50,
-    ),
-    "총비용": st.column_config.NumberColumn(
-        "총비용",
-        help="해당 키워드에 소요된 총 광고비",
-        min_value=0,
-        format="%d",
-    ),
-    "클릭수": st.column_config.NumberColumn(
-        "클릭수",
-        help="해당 키워드의 총 클릭 수",
-        min_value=0,
-        format="%d",
-    ),
-    "전환수": st.column_config.NumberColumn(
-        "전환수",
-        help="해당 키워드를 통한 총 전환 수",
-        min_value=0,
-        format="%d",
-    ),
-    "전환당매출액": st.column_config.NumberColumn(
-        "전환당매출액",
-        help="전환 1건당 평균 매출액 (ROAS 계산용, 없으면 빈칸)",
-        min_value=0,
-        format="%.0f",
-    ),
-}
-
-# 사용자가 데이터를 편집할 수 있는 인터랙티브 표 (데이터 에디터)
-edited_df = st.data_editor(
-    input_df,
-    column_config=column_config,
-    num_rows="dynamic", # 사용자가 행을 동적으로 추가/삭제 가능
-    height=300, # 표의 높이 지정
-    use_container_width=True
+# 데이터 입력 방법 선택
+input_method = st.radio(
+    "데이터 입력 방법 선택:",
+    ["직접 입력/붙여넣기", "CSV 파일 업로드"]
 )
 
-# --- 분석 시작 버튼 및 로직 ---
-if st.button('🚀 분석 시작하기'):
-    # 입력된 데이터가 있는지 확인
-    valid_df = edited_df[edited_df['키워드'].astype(str).str.strip() != '']
+if input_method == "직접 입력/붙여넣기":
+    st.info("엑셀이나 구글 시트에서 [키워드, 총비용, 클릭수, 전환수, 전환당매출액] 데이터를 복사한 후, 아래 표의 첫 번째 칸을 클릭하고 붙여넣기(Ctrl+V) 하세요.")
+    st.warning("💡 **참고**: 동일한 키워드가 여러 행에 있는 경우, 자동으로 합산되어 하나의 키워드로 분석됩니다.")
     
-    if valid_df.empty:
-        st.warning("분석할 데이터를 입력해주세요.")
+    # 사용자가 데이터를 붙여넣기 쉽도록 예시 데이터가 포함된 빈 데이터프레임 생성
+    sample_data = {
+        '키워드': ['볼보 XC60', '볼보 S90 가격', '전기차 보조금', '수입 SUV 추천', '안전한 차'],
+        '총비용': [500000, 350000, 700000, 420000, 150000],
+        '클릭수': [1000, 800, 1200, 950, 300],
+        '전환수': [20, 10, 30, 25, 5],
+        '전환당매출액': [100000.0, 150000.0, 80000.0, None, 120000.0]
+    }
+    input_df = pd.DataFrame(sample_data)
+    
+    # 컬럼 설정
+    column_config = {
+        "키워드": st.column_config.TextColumn(
+            "키워드",
+            help="분석할 키워드를 입력하세요",
+            max_chars=50,
+        ),
+        "총비용": st.column_config.NumberColumn(
+            "총비용",
+            help="해당 키워드에 소요된 총 광고비",
+            min_value=0,
+            format="%d",
+        ),
+        "클릭수": st.column_config.NumberColumn(
+            "클릭수",
+            help="해당 키워드의 총 클릭 수",
+            min_value=0,
+            format="%d",
+        ),
+        "전환수": st.column_config.NumberColumn(
+            "전환수",
+            help="해당 키워드를 통한 총 전환 수",
+            min_value=0,
+            format="%d",
+        ),
+        "전환당매출액": st.column_config.NumberColumn(
+            "전환당매출액",
+            help="전환 1건당 평균 매출액 (ROAS 계산용, 없으면 빈칸)",
+            min_value=0,
+            format="%.0f",
+        ),
+    }
+    
+    # 사용자가 데이터를 편집할 수 있는 인터랙티브 표
+    edited_df = st.data_editor(
+        input_df,
+        column_config=column_config,
+        num_rows="dynamic",
+        height=300,
+        use_container_width=True
+    )
+    
+    analysis_df = edited_df
+
+else:  # CSV 파일 업로드
+    uploaded_file = st.file_uploader(
+        "CSV 파일을 선택하세요",
+        type=['csv'],
+        help="컬럼명이 [키워드, 총비용, 클릭수, 전환수, 전환당매출액] 형식인 CSV 파일"
+    )
+    
+    if uploaded_file is not None:
+        try:
+            analysis_df = pd.read_csv(uploaded_file, encoding='utf-8-sig')
+            st.success("파일이 성공적으로 업로드되었습니다!")
+            st.dataframe(analysis_df.head(10))
+        except Exception as e:
+            st.error(f"파일 읽기 오류: {e}")
+            analysis_df = None
+    else:
+        analysis_df = None
+
+# --- 분석 시작 버튼 및 로직 ---
+if st.button('🚀 분석 시작하기', type='primary'):
+    if analysis_df is None or analysis_df.empty:
+        st.warning("분석할 데이터를 입력하거나 업로드해주세요.")
     elif total_weight == 0:
         st.warning("최소 하나의 가중치는 0보다 커야 합니다.")
     else:
+        # 입력된 데이터가 있는지 확인
+        valid_df = analysis_df.copy()
+        
         # 로딩 스피너와 함께 분석 함수 실행
         with st.spinner('데이터를 분석하고 있습니다. 잠시만 기다려주세요...'):
             result_data = run_keyword_analysis(
@@ -329,7 +409,7 @@ if st.button('🚀 분석 시작하기'):
                 # 다운로드 버튼
                 csv = result_data.to_csv(index=False).encode('utf-8-sig')
                 st.download_button(
-                    label="결과 다운로드 (CSV)",
+                    label="📥 결과 다운로드 (CSV)",
                     data=csv,
                     file_name='keyword_analysis_result.csv',
                     mime='text/csv',
