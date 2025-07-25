@@ -1,11 +1,11 @@
-# app.py (성과 점수 기준 조절 & ROAS 추가)
+# app.py (성과 점수 기준 조절 & ROAS 추가 & 키워드 집계 기능 추가)
 
 import streamlit as st
 import pandas as pd
 import numpy as np
 
 # --------------------------------------------------------------------------
-# 개선된 키워드 분석 로직 (성과 점수 가중치 조절 & ROAS 추가)
+# 개선된 키워드 분석 로직 (성과 점수 가중치 조절 & ROAS 추가 & 키워드 집계)
 # --------------------------------------------------------------------------
 def run_keyword_analysis(df: pd.DataFrame, contrib_weight: float, rate_weight: float, cpa_weight: float):
     try:
@@ -20,9 +20,33 @@ def run_keyword_analysis(df: pd.DataFrame, contrib_weight: float, rate_weight: f
         df[col_cost] = pd.to_numeric(df[col_cost], errors='coerce').fillna(0)
         df[col_clicks] = pd.to_numeric(df[col_clicks], errors='coerce').fillna(0)
         df[col_conversions] = pd.to_numeric(df[col_conversions], errors='coerce').fillna(0)
-        df[col_revenue_per_conv] = pd.to_numeric(df[col_revenue_per_conv], errors='coerce')  # NaN은 유지
-        df = df.dropna(subset=[col_keyword]) # 키워드 없는 행 제거
-        df = df[df[col_keyword].astype(str).str.strip() != ''] # 빈 키워드 제거
+        df[col_revenue_per_conv] = pd.to_numeric(df[col_revenue_per_conv], errors='coerce')
+        df = df.dropna(subset=[col_keyword])
+        df = df[df[col_keyword].astype(str).str.strip() != '']
+
+        # --- 키워드별로 데이터 집계 (추가된 부분) ---
+        # 전환당매출액은 가중평균으로 계산
+        def weighted_avg_revenue(group):
+            conversions = group[col_conversions]
+            revenues = group[col_revenue_per_conv]
+            # 전환수가 있고 매출액이 있는 경우만 계산
+            valid_mask = (conversions > 0) & (~revenues.isna())
+            if valid_mask.any():
+                total_conversions = conversions[valid_mask].sum()
+                weighted_sum = (conversions[valid_mask] * revenues[valid_mask]).sum()
+                return weighted_sum / total_conversions if total_conversions > 0 else None
+            return None
+        
+        # 키워드별로 집계
+        df_grouped = df.groupby(col_keyword).agg({
+            col_cost: 'sum',
+            col_clicks: 'sum',
+            col_conversions: 'sum',
+            col_revenue_per_conv: weighted_avg_revenue
+        }).reset_index()
+        
+        # 집계된 데이터로 df 교체
+        df = df_grouped
 
         # --- 1. 지표 계산 ---
         conv_eff_list = []      # 전환 효율 (전환수/비용)
@@ -208,6 +232,7 @@ st.write("---")
 # --- 데이터 입력 UI ---
 st.subheader("📋 데이터 입력")
 st.info("엑셀이나 구글 시트에서 [키워드, 총비용, 클릭수, 전환수, 전환당매출액] 데이터를 복사한 후, 아래 표의 첫 번째 칸을 클릭하고 붙여넣기(Ctrl+V) 하세요. 전환당매출액이 없는 경우 빈칸으로 두면 ROAS는 계산되지 않습니다.")
+st.warning("💡 **참고**: 동일한 키워드가 여러 행에 있는 경우, 자동으로 합산되어 하나의 키워드로 분석됩니다.")
 
 # 사용자가 데이터를 붙여넣기 쉽도록 예시 데이터가 포함된 빈 데이터프레임 생성
 sample_data = {
